@@ -14,7 +14,7 @@ int main(){
     ShareHash<int64_t, int64_t> *sharehashmap = new ShareHash<int64_t, int64_t>();
 
     //define element number
-    const int NUM_ELEMENTS = 10000000;
+    const int NUM_ELEMENTS = 100000000;
 
     //start time
     auto start = std::chrono::high_resolution_clock::now();

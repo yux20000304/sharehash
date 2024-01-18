@@ -7,11 +7,12 @@
 
 #include <iostream>
 #include <cstring>
+#include <functional>
 #include "murmur3.h"
 
 #define SHAREBUCKETSIZE 4
-#define BUCKETNUMBER 10000
-#define SEARCHRANGE 50
+#define BUCKETNUMBER 100000
+#define SEARCHRANGE 500
 
 typedef uint8_t bitmap_t;
 #define BITMAP_WIDTH (sizeof(bitmap_t) * 8)
@@ -130,8 +131,9 @@ public:
         deleteShareHash();
     }
 
-    bool get(Key &key, Value &value){
-        int bucket_num = murmurHash(static_cast<void*>(&key), sizeof(key), top_index->f_seed) % top_index->bucket_num;
+    bool get(const Key &key, Value &value){
+//        int bucket_num = murmurHash(reinterpret_cast<const void*>(&key), sizeof(key), top_index->f_seed) % top_index->bucket_num;
+        int bucket_num = hash_func(key) % top_index->bucket_num;
         struct bucketInfo *bucket = top_index->buckets + bucket_num;
         int item_index = bucket->begin_index;
         for(int i = item_index; i < bucket->capacity + item_index; i++){
@@ -145,10 +147,11 @@ public:
         return false;
     }
 
-    bool insert(Key &key, Value &value){
+    bool insert(const Key &key, const Value &value){
         retry:
         //locate the bucket
-        int bucket_num = murmurHash(static_cast<void *>(&key), sizeof(key), top_index->f_seed) % top_index->bucket_num;
+//        int bucket_num = murmurHash(reinterpret_cast<const void*>(&key), sizeof(key), top_index->f_seed) % top_index->bucket_num;
+        int bucket_num = hash_func(key) % top_index->bucket_num;
         struct bucketInfo *bucket = top_index->buckets + bucket_num;
 
         //bucket is available
@@ -213,8 +216,8 @@ public:
         return true;
     }
 
-    bool remove(Key &key, Value &value){
-        int bucket_num = murmurHash(static_cast<void*>(&key), sizeof(key), top_index->f_seed) % top_index->bucket_num;
+    bool remove(const Key &key){
+        int bucket_num = murmurHash(reinterpret_cast<const void*>(&key), sizeof(key), top_index->f_seed) % top_index->bucket_num;
         struct bucketInfo *bucket = top_index->buckets + bucket_num;
         int item_index = bucket->begin_index;
         for(int i = item_index; i < bucket->capacity; i++){
@@ -274,7 +277,7 @@ public:
 private:
     struct topIndex *top_index;
     struct bucketItem *bucket_items;
-
+    std::hash<Key> hash_func;
 };
 
 
