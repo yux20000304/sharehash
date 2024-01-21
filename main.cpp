@@ -1,10 +1,10 @@
 #include <iostream>
-#include "sharehash.h"
+#include "ShareHash.h"
 
 #define DATANUMBER 10000000
 
 int main() {
-    ShareHash<int64_t, int64_t> *sharehashmap = new ShareHash<int64_t, int64_t>();
+    auto *sharehashmap = new ShareHash::sharehash<int64_t, int64_t>();
     int insert_counter = 0;
     int get_counter = 0;
 
