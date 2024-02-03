@@ -1,0 +1,4 @@
+C:\Windows\system32\wsl.exe --distribution Ubuntu-20.04 --exec /usr/bin/zsh -c "export CMAKE_COLOR_DIAGNOSTICS=ON && export CLION_IDE=TRUE && export JETBRAINS_IDE=TRUE && cd /home/yyx/sharehash/cmake-build-debug && /usr/local/bin/cmake -DCMAKE_BUILD_TYPE=Debug -G 'CodeBlocks - Unix Makefiles' -S /home/yyx/sharehash -B /home/yyx/sharehash/cmake-build-debug"
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/yyx/sharehash/cmake-build-debug

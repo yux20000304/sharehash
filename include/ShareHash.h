@@ -9,11 +9,12 @@
 #include <cstring>
 #include <functional>
 #include "murmur3.h"
+#include "concurrency.h"
 
 namespace ShareHash {
 
     #define SHAREBUCKETSIZE 4
-    #define BUCKETNUMBER 500000
+    #define BUCKETNUMBER 5000
     #define SEARCHRANGE 500
 
     typedef uint8_t bitmap_t;
@@ -41,6 +42,7 @@ namespace ShareHash {
             int f_seed;
             struct bucketInfo *buckets;
             bitmap_t *none_bitmap;
+            SpinLock *locks_;
         };
 
         //bucket item
@@ -96,6 +98,17 @@ namespace ShareHash {
             dealloc.deallocate(p, num);
         }
 
+        SpinLock *spinlock_allocator(int num) {
+            std::allocator<SpinLock> alloc;
+            SpinLock *p = alloc.allocate(num);
+            return p;
+        }
+
+        void spinlock_deallocator(SpinLock *p, int num) {
+            std::allocator<SpinLock> dealloc;
+            dealloc.deallocate(p, num);
+        }
+
         //initialize hash table
         void initShareHash() {
             top_index = topIndex_allocator(1);
@@ -105,6 +118,7 @@ namespace ShareHash {
             top_index->f_seed = rand() % MAX_PRIME32;
             top_index->none_bitmap = bitmap_allocator(BITMAP_SIZE(top_index->item_num));
             memset(top_index->none_bitmap, 0xff, sizeof(bitmap_t) * BITMAP_SIZE(top_index->item_num));
+            top_index->locks_ = new SpinLock[top_index->item_num];
             bucket_items = bucketItem_allocator(BUCKETNUMBER * SHAREBUCKETSIZE);
 
             //clear bucket data
@@ -120,6 +134,8 @@ namespace ShareHash {
             bucketItem_deallocator(bucket_items, delete_top_index->item_num);
             bucketInfo_deallocator(delete_top_index->buckets, delete_top_index->bucket_num);
             bitmap_deallocator(delete_top_index->none_bitmap, BITMAP_SIZE(delete_top_index->item_num));
+            rwlock_deallocator(delete_top_index->locks_, delete_top_index->item_num);
+            delete[] delete_top_index->locks_;
             topIndex_deallocator(delete_top_index, 1);
         }
 
@@ -140,16 +156,19 @@ namespace ShareHash {
             int item_index = bucket->begin_index;
             for (int i = item_index; i < bucket->capacity + item_index; i++) {
                 if (!BITMAP_GET(top_index->none_bitmap, i)) {
+                    top_index->locks_[i].lock();
                     if (bucket_items[i].key == key) {
                         value = bucket_items[i].value;
+                        top_index->locks_[i].unlock();
                         return true;
                     }
+                    top_index->locks_[i].unlock();
                 }
             }
             return false;
         }
 
-        bool insert(const Key key, const Value value) {
+        bool insert(const Key key, const Value value, bool resize_insert = false) {
             retry:
             //locate the bucket
 //        int bucket_num = murmurHash(reinterpret_cast<const void*>(&key), sizeof(key), top_index->f_seed) % top_index->bucket_num;
@@ -157,42 +176,62 @@ namespace ShareHash {
             struct bucketInfo *bucket = top_index->buckets + bucket_num;
 
             //bucket is available
-            if (bucket->counter < bucket->capacity) {
-                BITMAP_CLEAR(top_index->none_bitmap, bucket->begin_index + bucket->counter);
-                bucket_items[bucket->begin_index + bucket->counter].key = key;
-                bucket_items[bucket->begin_index + bucket->counter].value = value;
-                bucket->counter++;
+            if (checkBucket(bucket_num)) {
+                for(int i = bucket->begin_index; i < bucket->begin_index + bucket->capacity; i++) {
+                    if (BITMAP_GET(top_index->none_bitmap, i)) {
+                        top_index->locks_[i].lock();
+                        BITMAP_CLEAR(top_index->none_bitmap, i);
+                        bucket_items[i].key = key;
+                        bucket_items[i].value = value;
+                        top_index->locks_[i].unlock();
+                        bucket->counter++;
+                        break;
+                    }
+                }
             } else {   //bucket is full, we need to evict data in the next bucket
                 //check the next five bucket
                 int cur_bucket_num = bucket_num + 1;
                 int offset = 1;
                 while (cur_bucket_num < top_index->bucket_num && offset < SEARCHRANGE) {
-                    if (checkNextBucket(cur_bucket_num)) {  //have slot to evict
+                    if (checkBucket(cur_bucket_num)) {  //have slot to evict
                         //do eviction
                         while (cur_bucket_num > bucket_num) {
                             bucketInfo *cur_bucket = top_index->buckets + cur_bucket_num;
                             bucketInfo *pre_bucket = top_index->buckets + cur_bucket_num - 1;
                             int old_index = cur_bucket->begin_index;
                             int new_index = cur_bucket->begin_index;
-                            //find the first occupied slot
+                            //find the first empty slot
                             for (int i = 0; i < cur_bucket->capacity; i++) {
                                 if (BITMAP_GET(top_index->none_bitmap, cur_bucket->begin_index + i)) {
                                     new_index += i;
                                     break;
                                 }
                             }
-                            //find the first empty slot
+                            //find the first occupied slot
                             for (int i = 0; i < cur_bucket->capacity; i++) {
                                 if (!BITMAP_GET(top_index->none_bitmap, cur_bucket->begin_index + i)) {
                                     old_index += i;
                                     break;
                                 }
                             }
-                            BITMAP_CLEAR(top_index->none_bitmap, new_index);
-                            BITMAP_SET(top_index->none_bitmap, old_index);
-                            bucket_items[new_index].key = bucket_items[old_index].key;
-                            bucket_items[new_index].value = bucket_items[old_index].value;
-                            cur_bucket->begin_index++;
+                            //prevent dead lock
+                            if(old_index == new_index){
+
+                            }
+                            else if(new_index == cur_bucket->begin_index){  //first slot is empty, simply shrink
+                                cur_bucket->begin_index++;
+                            }
+                            else {
+                                top_index->locks_[new_index].lock();
+                                top_index->locks_[old_index].lock();
+                                BITMAP_CLEAR(top_index->none_bitmap, new_index);
+                                BITMAP_SET(top_index->none_bitmap, old_index);
+                                bucket_items[new_index].key = bucket_items[old_index].key;
+                                bucket_items[new_index].value = bucket_items[old_index].value;
+                                top_index->locks_[old_index].unlock();
+                                top_index->locks_[new_index].unlock();
+                                cur_bucket->begin_index++;
+                            }
                             cur_bucket->capacity--;
                             pre_bucket->capacity++;
                             cur_bucket_num--;
@@ -208,9 +247,11 @@ namespace ShareHash {
                     resize();
                     goto retry;
                 }
+                top_index->locks_[bucket->begin_index + bucket->counter].lock();
                 BITMAP_CLEAR(top_index->none_bitmap, bucket->begin_index + bucket->counter);
                 bucket_items[bucket->begin_index + bucket->counter].key = key;
                 bucket_items[bucket->begin_index + bucket->counter].value = value;
+                top_index->locks_[bucket->begin_index + bucket->counter].unlock();
                 bucket->counter++;
             }
 
@@ -224,14 +265,18 @@ namespace ShareHash {
             int item_index = bucket->begin_index;
             for (int i = item_index; i < bucket->capacity; i++) {
                 if (!BITMAP_GET(top_index->none_bitmap, i)) {
+                    top_index->locks_[i].lock();
                     if (bucket_items[i].key == key) {
                         BITMAP_SET(top_index->none_bitmap, i);
+                        top_index->locks_[i].unlock();
                         return true;
                     }
+                    top_index->locks_[i].unlock();
                 }
             }
             return false;
         }
+
 
         bool resize() {
             //simply rehash all the elements to the new array
@@ -245,6 +290,7 @@ namespace ShareHash {
             bucket_items = bucketItem_allocator(top_index->item_num);
             top_index->none_bitmap = bitmap_allocator(top_index->item_num);
             memset(top_index->none_bitmap, 0xff, sizeof(bitmap_t) * BITMAP_SIZE(top_index->item_num));
+            top_index->locks_ = new SpinLock[top_index->item_num];
 
             int bucket_num = 0;
 
@@ -266,11 +312,13 @@ namespace ShareHash {
             bitmap_deallocator(old_top_index->none_bitmap, BITMAP_SIZE(old_top_index->item_num));
             topIndex_deallocator(old_top_index, 1);
 
+            delete[] top_index->locks_;
+
             std::cout << "resize done!" << std::endl;
             return true;
         }
 
-        bool checkNextBucket(int &bucket_num) {
+        bool checkBucket(int &bucket_num) {
             bucketInfo *bucket;
             bucket = top_index->buckets + bucket_num;
             return bucket->counter < bucket->capacity;
@@ -289,6 +337,7 @@ namespace ShareHash {
             index_size += sizeof(*this);
             index_size += getBucketNumber() * sizeof(bucketInfo);
             index_size += getItemNumber() * sizeof(bucketItem);
+            index_size += getItemNumber() * sizeof(SpinLock);
             return index_size;
         }
 

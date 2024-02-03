@@ -7,8 +7,9 @@
 
 ```
 sudo apt update
-sudo apt install build-essential libboost-all-dev
+sudo apt install build-essential libboost-all-dev libsparsehash-dev
 ```
+We make and install cuckoo hashmap from [libcuckoo](https://github.com/efficient/libcuckoo)
 
 ## Build and Run
 

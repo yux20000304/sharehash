@@ -12,10 +12,8 @@ namespace MapEmbed{
 
     #define MAX_PRIME32 1229
 
-    #define FORCE_INLINE	__forceinline
-
-    #define ROTL32(x,y)	_rotl(x,y)
-    #define ROTL64(x,y)	_rotl64(x,y)
+    #define	ROTL32(x,y)	rotl32(x,y)
+    #define ROTL64(x,y)	rotl64(x,y)
 
     #define BIG_CONSTANT(x) (x)
 
@@ -32,8 +30,6 @@ namespace MapEmbed{
       return (x << r) | (x >> (64 - r));
     }
 
-    #define	ROTL32(x,y)	rotl32(x,y)
-    #define ROTL64(x,y)	rotl64(x,y)
 
     FORCE_INLINE uint32_t getblock32 ( const uint32_t * p, int i )
     {
